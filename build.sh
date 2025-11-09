@@ -12,6 +12,8 @@ pip install -r requirements.txt
 pip install pyinstaller
 pyinstaller --windowed --name "PDF Creator" --icon=resources/icon.icns --add-data "resources:resources" pdf_creator.py
 
+xattr -cr "dist/PDF Creator.app"
+
 # Make sure entitlements are correct
 echo "Checking entitlements file..."
 cat entitlements.plist

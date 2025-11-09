@@ -2,6 +2,8 @@ import sys
 import os
 import subprocess
 import shutil
+import tempfile
+import threading
 from io import BytesIO
 from PIL import Image, ImageOps
 from PyQt6.QtWidgets import (
@@ -56,7 +58,9 @@ class PDFCreationWorker(QThread):
     errorOccurred = pyqtSignal(str)
 
     def __init__(self, image_paths, aktennummer, dokumentenkürzel, dokumentenzahl,
-                 pdf_path, briefkopf_path, output_folder, start_photo_number=1):
+                 pdf_path, briefkopf_path, output_folder, start_photo_number=1,
+                 use_original_filenames=False, save_to_disk=True,
+                 copy_images_to_output_dir=True, open_preview_only=False):
         super().__init__()
         self.image_paths = image_paths
         self.aktennummer = aktennummer
@@ -66,7 +70,12 @@ class PDFCreationWorker(QThread):
         self.briefkopf_path = briefkopf_path
         self.output_folder = output_folder
         self.start_photo_number = start_photo_number
+        self.use_original_filenames = use_original_filenames
+        self.save_to_disk = save_to_disk
+        self.copy_images_to_output_dir = copy_images_to_output_dir
+        self.open_preview_only = open_preview_only
         self._isCanceled = False
+        self._temp_processing_dir = None
 
     def cancel(self):
         self._isCanceled = True
@@ -117,17 +126,22 @@ class PDFCreationWorker(QThread):
 
                 file_extension = os.path.splitext(file_path)[1]
 
-                if self.dokumentenkürzel.startswith("("):
-                    image_filename = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {image_counter}{file_extension}"
-                else:
-                    image_filename = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {image_counter}{file_extension}"
-                
-                # Save the properly oriented image to the output folder
-                final_path = os.path.join(self.output_folder, image_filename)
-                img_raw.save(final_path, quality=85)
-                
+                # Save the properly oriented image to output if requested
+                if self.copy_images_to_output_dir:
+                    if self.dokumentenkürzel.startswith("("):
+                        image_filename = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {image_counter}{file_extension}"
+                    else:
+                        image_filename = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {image_counter}{file_extension}"
+                    final_path = os.path.join(self.output_folder, image_filename)
+                    img_raw.save(final_path, quality=85)
+
                 # Create a temporary file for the processed image to use in the PDF
-                temp_dir = os.path.join(self.output_folder, "temp")
+                if self.copy_images_to_output_dir:
+                    temp_dir = os.path.join(self.output_folder, "temp")
+                else:
+                    if self._temp_processing_dir is None:
+                        self._temp_processing_dir = tempfile.mkdtemp(prefix="applaus_pdf_temp_")
+                    temp_dir = self._temp_processing_dir
                 os.makedirs(temp_dir, exist_ok=True)
                 temp_path = os.path.join(temp_dir, f"temp_{image_counter}{file_extension}")
                 img.save(temp_path, quality=85)
@@ -216,11 +230,14 @@ class PDFCreationWorker(QThread):
                     pdf.image(processed_path, x=x_image, y=y_image, w=new_width, h=new_height)
 
                     pdf.set_font("Arial", "B", 11)
-                    
-                    if self.dokumentenkürzel.startswith("("):
-                        text = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {global_image_counter}"
+
+                    if self.use_original_filenames:
+                        text = os.path.basename(file_path)
                     else:
-                        text = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {global_image_counter}"
+                        if self.dokumentenkürzel.startswith("("):
+                            text = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {global_image_counter}"
+                        else:
+                            text = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {global_image_counter}"
                     text_width = pdf.get_string_width(text)
                     x_text = (page_width - text_width) / 2
                     y_text = y_image + new_height + offset
@@ -242,12 +259,16 @@ class PDFCreationWorker(QThread):
                         orig2_w, orig2_h = img2.size
 
                     pdf.set_font("Arial", "B", 11)
-                    if self.dokumentenkürzel.startswith("("):
-                        text1 = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {global_image_counter}"
-                        text2 = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {global_image_counter + 1}"
+                    if self.use_original_filenames:
+                        text1 = os.path.basename(file_path1)
+                        text2 = os.path.basename(file_path2)
                     else:
-                        text1 = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {global_image_counter}"
-                        text2 = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {global_image_counter + 1}"
+                        if self.dokumentenkürzel.startswith("("):
+                            text1 = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {global_image_counter}"
+                            text2 = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {global_image_counter + 1}"
+                        else:
+                            text1 = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {global_image_counter}"
+                            text2 = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {global_image_counter + 1}"
                     text1_width = pdf.get_string_width(text1)
                     text2_width = pdf.get_string_width(text2)
 
@@ -290,11 +311,15 @@ class PDFCreationWorker(QThread):
                     self.progressUpdate.emit(progress_count)
 
             if not self._isCanceled:
+                # Always write to a path; UI will decide persistence
                 pdf.output(self.save_path)
-                
-                # Clean up temporary files
-                temp_dir = os.path.join(self.output_folder, "temp")
-                if os.path.exists(temp_dir):
+
+                # Clean up temporary processed images
+                if self.copy_images_to_output_dir:
+                    temp_dir = os.path.join(self.output_folder, "temp")
+                else:
+                    temp_dir = self._temp_processing_dir
+                if temp_dir and os.path.exists(temp_dir):
                     try:
                         shutil.rmtree(temp_dir)
                     except Exception as e:
@@ -443,6 +468,12 @@ class ImageUploader(QWidget):
         pdf_buttons_layout = QHBoxLayout()
         pdf_buttons_layout.setContentsMargins(150, 10, 150, 0)
         pdf_buttons_layout.setSpacing(10)
+
+        self.preview_original_button = QPushButton("Vorschau (Originale)", self)
+        self.preview_original_button.setEnabled(False)
+        self.preview_original_button.clicked.connect(self.createPreviewOriginal)
+        self.preview_original_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        pdf_buttons_layout.addWidget(self.preview_original_button)
 
         self.pdf_button = QPushButton("PDF erstellen", self)
         self.pdf_button.setEnabled(False)
@@ -643,6 +674,70 @@ class ImageUploader(QWidget):
         dokumentenzahl_filled = bool(self.dokumentenzahl_input.text().strip())
         images_present = bool(self.images)
         self.pdf_button.setEnabled(aktennummer_filled and dokumentenzahl_filled and images_present)
+        # Preview does not require aktennummer to be filled
+        self.preview_original_button.setEnabled(images_present)
+
+    def createPreviewOriginal(self):
+        # Validate images
+        if not self.images:
+            QMessageBox.warning(self, "Keine Bilder", "Bitte fügen Sie mindestens ein Bild hinzu.")
+            return
+
+        try:
+            start_photo_number = int(self.start_photo_number.text().strip())
+        except ValueError:
+            start_photo_number = 1
+
+        # Collect image paths
+        image_paths = [p for _, p, _ in self.images]
+
+        # Group for progress calculation to match normal flow
+        def is_horizontal(fp):
+            try:
+                with Image.open(fp) as im:
+                    im = ImageOps.exif_transpose(im)
+                    w, h = im.size
+                return w >= h
+            except:
+                return False
+
+        grouped = []
+        i = 0
+        n = len(image_paths)
+        while i < n:
+            if not is_horizontal(image_paths[i]):
+                grouped.append([image_paths[i]])
+                i += 1
+            else:
+                if i + 1 < n and is_horizontal(image_paths[i + 1]):
+                    grouped.append([image_paths[i], image_paths[i + 1]])
+                    i += 2
+                else:
+                    grouped.append([image_paths[i]])
+                    i += 1
+        total_images = sum(len(g) for g in grouped)
+
+        # Show progress dialog
+        self.pdf_progress_dialog = self.showProgress(total_images, "Creating PDF Preview...")
+        briefkopf_path = self.resource_path(os.path.join('resources', 'briefkopf.png'))
+
+        # Create temporary output folder and PDF path
+        preview_temp_dir = tempfile.mkdtemp(prefix="applaus_preview_")
+        pdf_path = os.path.join(preview_temp_dir, "preview.pdf")
+
+        # Start worker with preview flags and reuse the same creation routine
+        self.pdf_worker = PDFCreationWorker(
+            image_paths, "", "", "",
+            pdf_path, briefkopf_path, preview_temp_dir, start_photo_number,
+            use_original_filenames=True, save_to_disk=False,
+            copy_images_to_output_dir=False, open_preview_only=True
+        )
+        self.pdf_worker.progressUpdate.connect(lambda val: self.pdf_progress_dialog.setValue(val))
+        self.pdf_progress_dialog.canceled.connect(self.pdf_worker.cancel)
+        # Connect to dedicated preview finished handler
+        self.pdf_worker.finished.connect(lambda path, temp_dir=preview_temp_dir: self.previewFinished(path, temp_dir))
+        self.pdf_worker.errorOccurred.connect(self.pdfError)
+        self.pdf_worker.start()
 
     def createPDF(self):
         if not self.images:
@@ -809,6 +904,33 @@ class ImageUploader(QWidget):
     def pdfError(self, error_message):
         self.pdf_progress_dialog.close()
         QMessageBox.critical(self, "Fehler", f"Beim Erstellen der PDF ist ein Fehler aufgetreten:\n{error_message}")
+
+    def previewFinished(self, save_path, temp_dir):
+        # Close progress and open in Preview only, then clean up temporary resources
+        self.pdf_progress_dialog.close()
+
+        def _open_and_cleanup(path, dir_path):
+            try:
+                if sys.platform == "darwin":
+                    subprocess.run(["open", "-W", "-a", "Preview", path])
+                elif sys.platform == "win32":
+                    os.startfile(path)
+                else:
+                    subprocess.run(["xdg-open", path])
+            finally:
+                try:
+                    if os.path.exists(path):
+                        os.remove(path)
+                except Exception:
+                    pass
+                try:
+                    if os.path.isdir(dir_path):
+                        shutil.rmtree(dir_path)
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=_open_and_cleanup, args=(save_path, temp_dir), daemon=True)
+        t.start()
 
 
 if __name__ == '__main__':
