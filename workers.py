@@ -1,6 +1,7 @@
 import os
 import shutil
 import tempfile
+import zipfile
 from io import BytesIO
 from PIL import Image, ImageOps
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -52,7 +53,8 @@ class PDFCreationWorker(QThread):
     def __init__(self, image_paths, aktennummer, dokumentenkürzel, dokumentenzahl,
                  pdf_path, briefkopf_path, output_folder, start_photo_number=1,
                  use_original_filenames=False, save_to_disk=True,
-                 copy_images_to_output_dir=True, open_preview_only=False):
+                 copy_images_to_output_dir=True, open_preview_only=False,
+                 zip_images=False):
         super().__init__()
         self.image_paths = image_paths
         self.aktennummer = aktennummer
@@ -66,8 +68,11 @@ class PDFCreationWorker(QThread):
         self.save_to_disk = save_to_disk
         self.copy_images_to_output_dir = copy_images_to_output_dir
         self.open_preview_only = open_preview_only
+        self.zip_images = zip_images
         self._isCanceled = False
         self._temp_processing_dir = None
+        self._zipf = None
+        self.zip_path = None
 
     def cancel(self):
         self._isCanceled = True
@@ -118,14 +123,40 @@ class PDFCreationWorker(QThread):
 
                 file_extension = os.path.splitext(file_path)[1]
 
-                # Save the properly oriented image to output if requested
+                # Save the properly oriented image either to disk or zip if requested
                 if self.copy_images_to_output_dir:
                     if self.dokumentenkürzel.startswith("("):
                         image_filename = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {image_counter}{file_extension}"
                     else:
                         image_filename = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {image_counter}{file_extension}"
-                    final_path = os.path.join(self.output_folder, image_filename)
-                    img_raw.save(final_path, quality=85)
+
+                    if self.zip_images:
+                        if self._zipf is None:
+                            # Derive zip name from PDF save_path base name
+                            base_name = os.path.splitext(os.path.basename(self.save_path))[0]
+                            self.zip_path = os.path.join(self.output_folder, f"{base_name} Bilder.zip")
+                            self._zipf = zipfile.ZipFile(self.zip_path, mode='w', compression=zipfile.ZIP_DEFLATED)
+
+                        # Choose format based on original extension
+                        ext = file_extension.lower()
+                        if ext in ('.jpg', '.jpeg'):
+                            fmt = 'JPEG'
+                        elif ext == '.png':
+                            fmt = 'PNG'
+                        elif ext == '.bmp':
+                            fmt = 'BMP'
+                        else:
+                            fmt = 'JPEG'
+
+                        buf = BytesIO()
+                        if fmt == 'JPEG':
+                            img_raw.save(buf, format=fmt, quality=85)
+                        else:
+                            img_raw.save(buf, format=fmt)
+                        self._zipf.writestr(image_filename, buf.getvalue())
+                    else:
+                        final_path = os.path.join(self.output_folder, image_filename)
+                        img_raw.save(final_path, quality=85)
 
                 # Create a temporary file for the processed image to use in the PDF
                 if self.copy_images_to_output_dir:
@@ -316,6 +347,13 @@ class PDFCreationWorker(QThread):
                         shutil.rmtree(temp_dir)
                     except Exception as e:
                         print(f"Error cleaning up temp files: {e}")
+
+                # Close zip archive if used
+                if self._zipf is not None:
+                    try:
+                        self._zipf.close()
+                    except Exception:
+                        pass
 
                 self.finished.emit(self.save_path)
 

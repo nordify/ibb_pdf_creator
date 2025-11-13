@@ -8,7 +8,7 @@ from PIL import Image, ImageOps
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton, QLabel, QFileDialog,
     QLineEdit, QComboBox, QScrollArea, QFrame, QGridLayout, QHBoxLayout, QMessageBox,
-    QSizePolicy, QProgressDialog
+    QSizePolicy, QProgressDialog, QCheckBox
 )
 from PyQt6.QtGui import QPixmap, QIntValidator, QImage, QIcon, QDrag
 from PyQt6.QtCore import Qt, QTranslator, QLibraryInfo, QLocale, QMimeData, QPoint
@@ -115,6 +115,11 @@ class ImageUploader(QWidget):
         start_number_layout.addWidget(self.start_photo_number)
         start_number_layout.addStretch()
         layout.addLayout(start_number_layout)
+
+        # Add ZIP saving toggle (default ON)
+        self.save_images_as_zip_checkbox = QCheckBox("Bilder als ZIP-Datei speichern", self)
+        self.save_images_as_zip_checkbox.setChecked(True)
+        layout.addWidget(self.save_images_as_zip_checkbox)
 
         self.upload_button = QPushButton("Dateien hinzufügen", self)
         self.upload_button.clicked.connect(self.openFileDialog)
@@ -417,7 +422,8 @@ class ImageUploader(QWidget):
             image_paths, "", "", "",
             pdf_path, briefkopf_path, preview_temp_dir, start_photo_number,
             use_original_filenames=True, save_to_disk=False,
-            copy_images_to_output_dir=False, open_preview_only=True
+            copy_images_to_output_dir=False, open_preview_only=True,
+            zip_images=False
         )
         self.pdf_worker.progressUpdate.connect(lambda val: self.pdf_progress_dialog.setValue(val))
         self.pdf_progress_dialog.canceled.connect(self.pdf_worker.cancel)
@@ -563,7 +569,8 @@ class ImageUploader(QWidget):
         briefkopf_path = self.resource_path(os.path.join('resources', 'briefkopf.png'))
         self.pdf_worker = PDFCreationWorker(image_paths, aktennummer, dokumentenkürzel,
                                              dokumentenzahl, pdf_path, briefkopf_path, 
-                                             output_folder, start_photo_number)
+                                             output_folder, start_photo_number,
+                                             zip_images=self.save_images_as_zip_checkbox.isChecked())
         self.pdf_worker.progressUpdate.connect(lambda val: self.pdf_progress_dialog.setValue(val))
         self.pdf_progress_dialog.canceled.connect(self.pdf_worker.cancel)
         self.pdf_worker.finished.connect(self.pdfFinished)
