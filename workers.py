@@ -3,8 +3,9 @@ import shutil
 import tempfile
 import zipfile
 from io import BytesIO
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageDraw, ImageFont
 from PyQt6.QtCore import QThread, pyqtSignal
+from datetime import datetime
 from PyQt6.QtGui import QImage
 from fpdf import FPDF
 
@@ -54,7 +55,8 @@ class PDFCreationWorker(QThread):
                  pdf_path, briefkopf_path, output_folder, start_photo_number=1,
                  use_original_filenames=False, save_to_disk=True,
                  copy_images_to_output_dir=True, open_preview_only=False,
-                 zip_images=False):
+                 zip_images=False, delete_originals=False, add_timestamp=False,
+                 add_timestamp_to_saved_files=False):
         super().__init__()
         self.image_paths = image_paths
         self.aktennummer = aktennummer
@@ -69,13 +71,84 @@ class PDFCreationWorker(QThread):
         self.copy_images_to_output_dir = copy_images_to_output_dir
         self.open_preview_only = open_preview_only
         self.zip_images = zip_images
+        self.delete_originals = delete_originals
+        self.add_timestamp = add_timestamp
+        self.add_timestamp_to_saved_files = add_timestamp_to_saved_files
         self._isCanceled = False
         self._temp_processing_dir = None
         self._zipf = None
         self.zip_path = None
+        self._copied_originals = []
 
     def cancel(self):
         self._isCanceled = True
+
+    def get_exif_datetime(self, file_path):
+        try:
+            with Image.open(file_path) as img:
+                exif_data = img._getexif()
+                if exif_data:
+                    for tag_id in [36867, 36868, 306]:
+                        if tag_id in exif_data:
+                            dt_str = exif_data[tag_id]
+                            try:
+                                dt = datetime.strptime(dt_str, "%Y:%m:%d %H:%M:%S")
+                                return dt.strftime("%d.%m.%Y %H:%M")
+                            except ValueError:
+                                continue
+        except Exception as e:
+            print(f"Error reading EXIF datetime: {e}")
+        return None
+
+    def add_timestamp_overlay(self, img, timestamp_text):
+        draw = ImageDraw.Draw(img)
+        
+        font_size = max(28, int(img.width * 0.04))
+        
+        try:
+            font_paths = [
+                "/System/Library/Fonts/Courier.dfont",
+                "/System/Library/Fonts/Monaco.dfont",
+                "/Library/Fonts/Courier New Bold.ttf",
+                "/Library/Fonts/Courier New.ttf",
+                "C:\\Windows\\Fonts\\courbd.ttf",
+                "C:\\Windows\\Fonts\\consolab.ttf",
+                "C:\\Windows\\Fonts\\consola.ttf",
+                "C:\\Windows\\Fonts\\cour.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            ]
+            font = None
+            for font_path in font_paths:
+                try:
+                    font = ImageFont.truetype(font_path, font_size)
+                    break
+                except (OSError, IOError):
+                    continue
+            if font is None:
+                font = ImageFont.load_default()
+        except Exception:
+            font = ImageFont.load_default()
+        
+        bbox = draw.textbbox((0, 0), timestamp_text, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        
+        padding = int(img.width * 0.02)
+        x = img.width - text_width - padding
+        y = img.height - text_height - padding
+        
+        outline_color = (0, 0, 0)
+        outline_range = 2
+        for dx in range(-outline_range, outline_range + 1):
+            for dy in range(-outline_range, outline_range + 1):
+                if dx != 0 or dy != 0:
+                    draw.text((x + dx, y + dy), timestamp_text, font=font, fill=outline_color)
+        
+        text_color = (255, 165, 0)
+        draw.text((x, y), timestamp_text, font=font, fill=text_color)
+        
+        return img
 
     def is_horizontal(self, file_path):
         try:
@@ -130,42 +203,56 @@ class PDFCreationWorker(QThread):
                     else:
                         image_filename = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {image_counter}{file_extension}"
 
+                    # Logic for timestamping saved images
+                    timestamp_text_saved = None
+                    if self.add_timestamp and self.add_timestamp_to_saved_files:
+                        timestamp_text_saved = self.get_exif_datetime(file_path)
+
                     if self.zip_images:
                         if self._zipf is None:
                             # Derive zip name from PDF save_path base name
                             base_name = os.path.splitext(os.path.basename(self.save_path))[0]
                             self.zip_path = os.path.join(self.output_folder, f"{base_name} Bilder.zip")
-                            self._zipf = zipfile.ZipFile(self.zip_path, mode='w', compression=zipfile.ZIP_DEFLATED)
+                            self._zipf = zipfile.ZipFile(self.zip_path, mode='w', compression=zipfile.ZIP_STORED)
 
-                        # Choose format based on original extension
-                        ext = file_extension.lower()
-                        if ext in ('.jpg', '.jpeg'):
-                            fmt = 'JPEG'
-                        elif ext == '.png':
-                            fmt = 'PNG'
-                        elif ext == '.bmp':
-                            fmt = 'BMP'
+                        if timestamp_text_saved:
+                            img_to_save = img_raw.copy()
+                            if img_to_save.mode in ("RGBA", "LA"):
+                                img_to_save = img_to_save.convert("RGB")
+                            img_to_save = self.add_timestamp_overlay(img_to_save, timestamp_text_saved)
+                            buf = BytesIO()
+                            img_to_save.save(buf, format='JPEG', quality=95, subsampling=0)
+                            self._zipf.writestr(image_filename, buf.getvalue())
                         else:
-                            fmt = 'JPEG'
-
-                        buf = BytesIO()
-                        if fmt == 'JPEG':
-                            img_raw.save(buf, format=fmt, quality=85)
-                        else:
-                            img_raw.save(buf, format=fmt)
-                        self._zipf.writestr(image_filename, buf.getvalue())
+                            self._zipf.write(file_path, image_filename)
+                        
+                        self._copied_originals.append(file_path)
                     else:
                         final_path = os.path.join(self.output_folder, image_filename)
-                        img_raw.save(final_path, quality=85)
+                        if timestamp_text_saved:
+                            img_to_save = img_raw.copy()
+                            if img_to_save.mode in ("RGBA", "LA"):
+                                img_to_save = img_to_save.convert("RGB")
+                            img_to_save = self.add_timestamp_overlay(img_to_save, timestamp_text_saved)
+                            img_to_save.save(final_path, quality=95, subsampling=0)
+                        else:
+                            shutil.copy2(file_path, final_path)
+                        
+                        self._copied_originals.append(file_path)
 
-                # Create a temporary file for the processed image to use in the PDF
                 if self.copy_images_to_output_dir:
                     temp_dir = os.path.join(self.output_folder, "temp")
                 else:
                     if self._temp_processing_dir is None:
-                        self._temp_processing_dir = tempfile.mkdtemp(prefix="applaus_pdf_temp_")
+                        self._temp_processing_dir = tempfile.mkdtemp(prefix="pdf_temp_")
                     temp_dir = self._temp_processing_dir
                 os.makedirs(temp_dir, exist_ok=True)
+                
+                if self.add_timestamp:
+                    timestamp_text = self.get_exif_datetime(file_path)
+                    if timestamp_text:
+                        img = self.add_timestamp_overlay(img, timestamp_text)
+                
                 temp_path = os.path.join(temp_dir, f"temp_{image_counter}{file_extension}")
                 img.save(temp_path, quality=85)
                 
@@ -354,6 +441,14 @@ class PDFCreationWorker(QThread):
                         self._zipf.close()
                     except Exception:
                         pass
+
+                if self.delete_originals and self._copied_originals:
+                    for original_path in self._copied_originals:
+                        try:
+                            if os.path.exists(original_path):
+                                os.remove(original_path)
+                        except Exception as e:
+                            print(f"Error deleting original file {original_path}: {e}")
 
                 self.finished.emit(self.save_path)
 

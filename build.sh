@@ -1,4 +1,18 @@
 #!/bin/zsh
+
+# Ask version number
+echo "Enter version number (e.g. 1.2.3):"
+read VERSION
+
+if [[ -z "$VERSION" ]]; then
+    echo "Error: Version number is required"
+    exit 1
+fi
+
+BUILD_NUMBER="${VERSION//./}"
+
+echo "Building PDF Creator v$VERSION (build $BUILD_NUMBER)..."
+
 CERT_ID="Developer ID Application: Nordify UG (haftungsbeschrankt) (JG7CFYYV5B)"
 sudo rm -rf *.dmg
 sudo rm -f *.pdf
@@ -10,7 +24,12 @@ rm -f .DS_Store
 
 pip install -r requirements.txt
 pip install pyinstaller
-pyinstaller --windowed --name "PDF Creator" --icon=resources/icon.icns --add-data "resources:resources" pdf_creator.py
+
+sed -i '' "s/'CFBundleShortVersionString': '[^']*'/'CFBundleShortVersionString': '$VERSION'/" "PDF Creator.spec"
+sed -i '' "s/'CFBundleVersion': '[^']*'/'CFBundleVersion': '$BUILD_NUMBER'/" "PDF Creator.spec"
+
+echo "Building PDF Creator v$VERSION (build $BUILD_NUMBER)..."
+pyinstaller "PDF Creator.spec" --noconfirm
 
 xattr -cr "dist/PDF Creator.app"
 

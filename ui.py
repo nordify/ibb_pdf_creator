@@ -121,6 +121,14 @@ class ImageUploader(QWidget):
         self.save_images_as_zip_checkbox.setChecked(True)
         layout.addWidget(self.save_images_as_zip_checkbox)
 
+        self.delete_originals_checkbox = QCheckBox("Alte Bilder löschen", self)
+        self.delete_originals_checkbox.setChecked(False)
+        layout.addWidget(self.delete_originals_checkbox)
+
+        self.add_timestamp_checkbox = QCheckBox("Bilder mit Zeitstempeln versehen", self)
+        self.add_timestamp_checkbox.setChecked(False)
+        layout.addWidget(self.add_timestamp_checkbox)
+
         self.upload_button = QPushButton("Dateien hinzufügen", self)
         self.upload_button.clicked.connect(self.openFileDialog)
         layout.addWidget(self.upload_button)
@@ -414,7 +422,7 @@ class ImageUploader(QWidget):
         briefkopf_path = self.resource_path(os.path.join('resources', 'briefkopf.png'))
 
         # Create temporary output folder and PDF path
-        preview_temp_dir = tempfile.mkdtemp(prefix="applaus_preview_")
+        preview_temp_dir = tempfile.mkdtemp(prefix="pdf_preview_")
         pdf_path = os.path.join(preview_temp_dir, "preview.pdf")
 
         # Start worker with preview flags and reuse the same creation routine
@@ -423,7 +431,8 @@ class ImageUploader(QWidget):
             pdf_path, briefkopf_path, preview_temp_dir, start_photo_number,
             use_original_filenames=True, save_to_disk=False,
             copy_images_to_output_dir=False, open_preview_only=True,
-            zip_images=False
+            zip_images=False,
+            add_timestamp=self.add_timestamp_checkbox.isChecked()
         )
         self.pdf_worker.progressUpdate.connect(lambda val: self.pdf_progress_dialog.setValue(val))
         self.pdf_progress_dialog.canceled.connect(self.pdf_worker.cancel)
@@ -538,6 +547,20 @@ class ImageUploader(QWidget):
                     return
         os.makedirs(output_folder, exist_ok=True)
         pdf_path = os.path.join(output_folder, f"{base_name}.pdf")
+
+        # Ask about timestamps for saved images if the toggle is active
+        add_timestamp_to_saved_files = False
+        if self.add_timestamp_checkbox.isChecked():
+            reply = QMessageBox.question(
+                self,
+                "Zeitstempel",
+                "Sollen die Bilder, die im neuen Ordner/ZIP gespeichert werden, auch mit einem Zeitstempel versehen werden?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                add_timestamp_to_saved_files = True
+
         # Update this line to extract file paths from the new image tuple structure
         image_paths = [p for _, p, _ in self.images]
 
@@ -570,7 +593,10 @@ class ImageUploader(QWidget):
         self.pdf_worker = PDFCreationWorker(image_paths, aktennummer, dokumentenkürzel,
                                              dokumentenzahl, pdf_path, briefkopf_path, 
                                              output_folder, start_photo_number,
-                                             zip_images=self.save_images_as_zip_checkbox.isChecked())
+                                             zip_images=self.save_images_as_zip_checkbox.isChecked(),
+                                             delete_originals=self.delete_originals_checkbox.isChecked(),
+                                             add_timestamp=self.add_timestamp_checkbox.isChecked(),
+                                             add_timestamp_to_saved_files=add_timestamp_to_saved_files)
         self.pdf_worker.progressUpdate.connect(lambda val: self.pdf_progress_dialog.setValue(val))
         self.pdf_progress_dialog.canceled.connect(self.pdf_worker.cancel)
         self.pdf_worker.finished.connect(self.pdfFinished)
