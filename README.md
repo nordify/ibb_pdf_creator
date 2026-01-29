@@ -1,5 +1,5 @@
 
-# Applaus PDF Creator
+# IBB PDF Creator
 
 Installationsprozess:
 - Gehen Sie auf unsere [Releases](https://github.com/nordify/applaus_pdf_creator/releases)
