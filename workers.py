@@ -48,6 +48,7 @@ class ImageImportWorker(QThread):
 
 class PDFCreationWorker(QThread):
     progressUpdate = pyqtSignal(int)
+    statusUpdate = pyqtSignal(str)  # For status messages like "Saving PDF..."
     finished = pyqtSignal(str)
     errorOccurred = pyqtSignal(str)
 
@@ -79,9 +80,18 @@ class PDFCreationWorker(QThread):
         self._zipf = None
         self.zip_path = None
         self._copied_originals = []
+        self._total_images = len(image_paths)
 
     def cancel(self):
         self._isCanceled = True
+
+    def format_image_number(self, number):
+        if self._total_images <= 9:
+            return str(number)
+        elif self._total_images <= 99:
+            return f"{number:02d}"
+        else:
+            return f"{number:03d}"
 
     def get_exif_datetime(self, file_path):
         try:
@@ -198,10 +208,11 @@ class PDFCreationWorker(QThread):
 
                 # Save the properly oriented image either to disk or zip if requested
                 if self.copy_images_to_output_dir:
+                    formatted_num = self.format_image_number(image_counter)
                     if self.dokumentenkürzel.startswith("("):
-                        image_filename = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {image_counter}{file_extension}"
+                        image_filename = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {formatted_num}{file_extension}"
                     else:
-                        image_filename = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {image_counter}{file_extension}"
+                        image_filename = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {formatted_num}{file_extension}"
 
                     # Logic for timestamping saved images
                     timestamp_text_saved = None
@@ -344,10 +355,11 @@ class PDFCreationWorker(QThread):
                     if self.use_original_filenames:
                         text = os.path.basename(file_path)
                     else:
+                        formatted_num = self.format_image_number(global_image_counter)
                         if self.dokumentenkürzel.startswith("("):
-                            text = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {global_image_counter}"
+                            text = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {formatted_num}"
                         else:
-                            text = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {global_image_counter}"
+                            text = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {formatted_num}"
                     text_width = pdf.get_string_width(text)
                     x_text = (page_width - text_width) / 2
                     y_text = y_image + new_height + offset
@@ -373,12 +385,14 @@ class PDFCreationWorker(QThread):
                         text1 = os.path.basename(file_path1)
                         text2 = os.path.basename(file_path2)
                     else:
+                        formatted_num1 = self.format_image_number(global_image_counter)
+                        formatted_num2 = self.format_image_number(global_image_counter + 1)
                         if self.dokumentenkürzel.startswith("("):
-                            text1 = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {global_image_counter}"
-                            text2 = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {global_image_counter + 1}"
+                            text1 = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {formatted_num1}"
+                            text2 = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {formatted_num2}"
                         else:
-                            text1 = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {global_image_counter}"
-                            text2 = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {global_image_counter + 1}"
+                            text1 = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {formatted_num1}"
+                            text2 = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {formatted_num2}"
                     text1_width = pdf.get_string_width(text1)
                     text2_width = pdf.get_string_width(text2)
 
@@ -421,6 +435,9 @@ class PDFCreationWorker(QThread):
                     self.progressUpdate.emit(progress_count)
 
             if not self._isCanceled:
+                # Emit status update before saving PDF (this can take a while with many images)
+                self.statusUpdate.emit("PDF wird gespeichert...")
+                
                 # Always write to a path; UI will decide persistence
                 pdf.output(self.save_path)
 

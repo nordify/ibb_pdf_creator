@@ -214,6 +214,8 @@ class ImageUploader(QWidget):
         progress_dialog = QProgressDialog(text, "Cancel", 0, maximum, self)
         progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         progress_dialog.setMinimumDuration(0)
+        progress_dialog.setAutoClose(False)
+        progress_dialog.setAutoReset(False)
         progress_dialog.show()
         return progress_dialog
 
@@ -435,6 +437,7 @@ class ImageUploader(QWidget):
             add_timestamp=self.add_timestamp_checkbox.isChecked()
         )
         self.pdf_worker.progressUpdate.connect(lambda val: self.pdf_progress_dialog.setValue(val))
+        self.pdf_worker.statusUpdate.connect(lambda msg: self.pdf_progress_dialog.setLabelText(msg))
         self.pdf_progress_dialog.canceled.connect(self.pdf_worker.cancel)
         # Connect to dedicated preview finished handler
         self.pdf_worker.finished.connect(lambda path, temp_dir=preview_temp_dir: self.previewFinished(path, temp_dir))
@@ -598,6 +601,7 @@ class ImageUploader(QWidget):
                                              add_timestamp=self.add_timestamp_checkbox.isChecked(),
                                              add_timestamp_to_saved_files=add_timestamp_to_saved_files)
         self.pdf_worker.progressUpdate.connect(lambda val: self.pdf_progress_dialog.setValue(val))
+        self.pdf_worker.statusUpdate.connect(lambda msg: self.pdf_progress_dialog.setLabelText(msg))
         self.pdf_progress_dialog.canceled.connect(self.pdf_worker.cancel)
         self.pdf_worker.finished.connect(self.pdfFinished)
         self.pdf_worker.errorOccurred.connect(self.pdfError)
