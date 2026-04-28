@@ -8,14 +8,59 @@ from PIL import Image, ImageOps
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton, QLabel, QFileDialog,
     QLineEdit, QComboBox, QScrollArea, QFrame, QGridLayout, QHBoxLayout, QMessageBox,
-    QSizePolicy, QProgressDialog, QCheckBox
+    QSizePolicy, QProgressDialog, QCheckBox, QDialog
 )
-from PyQt6.QtGui import QPixmap, QIntValidator, QImage, QIcon, QDrag
-from PyQt6.QtCore import Qt, QTranslator, QLibraryInfo, QLocale, QMimeData, QPoint
+from PyQt6.QtGui import QPixmap, QIntValidator, QImage, QIcon, QDrag, QPainter, QFont, QColor
+from PyQt6.QtCore import Qt, QTranslator, QLibraryInfo, QLocale, QMimeData, QPoint, QTimer, QEvent
 
 from workers import ImageImportWorker, PDFCreationWorker
 
 os.environ["LANG"] = "de_DE.UTF-8"
+
+
+class ImagePreviewDialog(QDialog):
+    """Dialog to show a larger preview of an image."""
+    def __init__(self, file_path, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(os.path.basename(file_path))
+        self.setMinimumSize(400, 400)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        try:
+            pil_img = Image.open(file_path)
+            pil_img = ImageOps.exif_transpose(pil_img)
+            pil_img = pil_img.convert("RGBA")
+            data = pil_img.tobytes("raw", "RGBA")
+            qimage = QImage(data, pil_img.width, pil_img.height, 4 * pil_img.width,
+                            QImage.Format.Format_RGBA8888)
+            # Keep a reference so the data buffer isn't garbage-collected
+            qimage._pil_data = data
+            pixmap = QPixmap.fromImage(qimage)
+        except Exception:
+            pixmap = QPixmap()
+
+        if pixmap.isNull():
+            label = QLabel("Bild konnte nicht geladen werden.")
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(label)
+        else:
+            label = QLabel()
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            # Scale to fit a reasonable preview size while keeping aspect ratio
+            screen = QApplication.primaryScreen()
+            if screen:
+                screen_size = screen.availableGeometry()
+                max_w = int(screen_size.width() * 0.7)
+                max_h = int(screen_size.height() * 0.7)
+            else:
+                max_w, max_h = 800, 600
+            scaled = pixmap.scaled(max_w, max_h,
+                                   Qt.AspectRatioMode.KeepAspectRatio,
+                                   Qt.TransformationMode.SmoothTransformation)
+            label.setPixmap(scaled)
+            layout.addWidget(label)
+            self.resize(scaled.width(), scaled.height())
 
 
 class DraggableLabel(QLabel):
@@ -24,12 +69,16 @@ class DraggableLabel(QLabel):
         self.file_path = file_path
         self.main_window = main_window
         self.unique_id: str | None = None  # Use type annotation to indicate it can be str or None
+        self._is_dragging = False
         self.setAcceptDrops(True)
+        self.setMouseTracking(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet("border: 2px solid transparent;")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self.drag_start_position = event.pos()
+            self._is_dragging = False
 
     def mouseMoveEvent(self, event):
         if not (event.buttons() & Qt.MouseButton.LeftButton):
@@ -37,6 +86,7 @@ class DraggableLabel(QLabel):
         if (event.pos() - self.drag_start_position).manhattanLength() < QApplication.startDragDistance():
             return
 
+        self._is_dragging = True
         drag = QDrag(self)
         mime_data = QMimeData()
         mime_data.setText(self.file_path)
@@ -47,6 +97,13 @@ class DraggableLabel(QLabel):
             drag.setPixmap(pixmap.scaled(80, 80, Qt.AspectRatioMode.KeepAspectRatio))
             drag.setHotSpot(QPoint(pixmap.width() // 2, pixmap.height() // 2))
         drag.exec(Qt.DropAction.MoveAction)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and not self._is_dragging:
+            # Click without drag — open larger preview
+            dialog = ImagePreviewDialog(self.file_path, self.main_window)
+            dialog.exec()
+        self._is_dragging = False
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasText():
@@ -64,6 +121,13 @@ class DraggableLabel(QLabel):
             event.acceptProposedAction()
         self.setStyleSheet("border: 2px solid transparent;")
 
+    def enterEvent(self, event):
+        self.main_window._hovered_label = self
+
+    def leaveEvent(self, event):
+        if self.main_window._hovered_label is self:
+            self.main_window._hovered_label = None
+
 
 class ImageUploader(QWidget):
     def __init__(self):
@@ -77,12 +141,20 @@ class ImageUploader(QWidget):
         self.images = []
         self.import_worker = None
         self.pdf_worker = None
+        self._current_cols = 0
+        self._hovered_label = None
+        self._preview_dialog = None
+        # Install app-wide event filter so Space works regardless of focus
+        QApplication.instance().installEventFilter(self)
+
+    # Thumbnail cell size used for responsive column calculation
+    THUMB_CELL_WIDTH = 145
 
     def initUI(self):
         layout = QVBoxLayout()
         self.setAcceptDrops(True)
-        self.setMinimumSize(750, 600)
-        self.setMaximumSize(750, 600)
+        self.setMinimumSize(500, 450)
+        self.resize(750, 600)
 
         self.aktennummer_input = QLineEdit(self)
         self.aktennummer_input.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -149,12 +221,14 @@ class ImageUploader(QWidget):
         self.image_container = QWidget()
         self.image_layout = QGridLayout()
         self.image_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.image_layout.setSpacing(8)
         self.image_container.setLayout(self.image_layout)
         self.image_area.setWidget(self.image_container)
         self.image_area.setWidgetResizable(True)
         image_container_layout.addWidget(self.image_area)
         
-        layout.addLayout(image_container_layout)
+        # Give the image area all the remaining vertical space
+        layout.addLayout(image_container_layout, 1)
 
         self.empty_label = QLabel("Importiere Fotos oder ziehe sie hierhin", self.image_container)
         self.empty_label.setStyleSheet("color: #888888;")
@@ -166,7 +240,7 @@ class ImageUploader(QWidget):
         self.image_layout.addLayout(self.empty_layout, 0, 0)
 
         pdf_buttons_layout = QHBoxLayout()
-        pdf_buttons_layout.setContentsMargins(150, 10, 150, 0)
+        pdf_buttons_layout.setContentsMargins(0, 10, 0, 0)
         pdf_buttons_layout.setSpacing(10)
 
         self.preview_original_button = QPushButton("Vorschau (Originale)", self)
@@ -196,6 +270,14 @@ class ImageUploader(QWidget):
         self.overlay.setText("Drag & Drop Here")
         self.overlay.setVisible(False)
 
+    def _calcColumns(self):
+        """Calculate how many thumbnail columns fit in the current scroll area width."""
+        available = self.image_area.viewport().width()
+        if available <= 0:
+            available = self.width() - 40  # fallback before first paint
+        cols = max(1, available // self.THUMB_CELL_WIDTH)
+        return cols
+
     def rearrangeImages(self):
         for i in reversed(range(self.image_layout.count())):
             item = self.image_layout.itemAt(i)
@@ -204,10 +286,19 @@ class ImageUploader(QWidget):
                 if widget and widget != self.empty_label:
                     self.image_layout.removeWidget(widget)
                     widget.setParent(None)
+
+        try:
+            start_num = int(self.start_photo_number.text().strip())
+        except (ValueError, AttributeError):
+            start_num = 1
+
+        cols = self._calcColumns()
         for idx, (frame, _, _) in enumerate(self.images):
-            row = idx // 4
-            col = idx % 4
+            row = idx // cols
+            col = idx % cols
             self.image_layout.addWidget(frame, row, col)
+            # Update the number badge on each image
+            self._updateNumberBadge(frame, idx + start_num)
         self.empty_label.setVisible(len(self.images) == 0)
 
     def showProgress(self, maximum, text):
@@ -227,7 +318,32 @@ class ImageUploader(QWidget):
         return os.path.join(base_path, relative_path)
 
     def resizeEvent(self, event):
+        super().resizeEvent(event)
         self.overlay.setGeometry(self.rect())
+        if self.images:
+            new_cols = self._calcColumns()
+            if new_cols != self._current_cols:
+                self._current_cols = new_cols
+                self.rearrangeImages()
+
+    def eventFilter(self, obj, event):
+        if (event.type() == QEvent.Type.KeyPress
+                and event.key() == Qt.Key.Key_Space):
+            # If a preview is already open, close it
+            if self._preview_dialog is not None:
+                self._preview_dialog.close()
+                self._preview_dialog = None
+                return True
+            # Open preview for hovered thumbnail
+            if self._hovered_label is not None:
+                self._preview_dialog = ImagePreviewDialog(self._hovered_label.file_path, self)
+                self._preview_dialog.finished.connect(self._onPreviewClosed)
+                self._preview_dialog.show()
+                return True
+        return super().eventFilter(obj, event)
+
+    def _onPreviewClosed(self):
+        self._preview_dialog = None
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -279,6 +395,35 @@ class ImageUploader(QWidget):
     def importFinished(self):
         self.import_progress_dialog.close()
         self.updateImageCounter()  # Update the counter when import is finished
+
+    def _updateNumberBadge(self, frame, number):
+        """Update or create the number badge on an image frame."""
+        # Find existing badge or create one
+        badge = frame.findChild(QLabel, "number_badge")
+        if badge is None:
+            # Find the container widget's layout (the QGridLayout inside the frame)
+            container = frame.findChild(QWidget)
+            if container:
+                grid = container.layout()
+                if grid:
+                    badge = QLabel(container)
+                    badge.setObjectName("number_badge")
+                    badge.setFixedSize(22, 22)
+                    badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    badge.setStyleSheet("""
+                        QLabel {
+                            background-color: rgba(0, 0, 0, 0.65);
+                            color: white;
+                            border-radius: 11px;
+                            font-size: 11px;
+                            font-weight: bold;
+                            border: none;
+                        }
+                    """)
+                    badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+                    grid.addWidget(badge, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        if badge:
+            badge.setText(str(number))
 
     def addImageFromWorker(self, file_path, qimage):
         pixmap = QPixmap.fromImage(qimage)
