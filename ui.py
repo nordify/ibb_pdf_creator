@@ -201,6 +201,14 @@ class ImageUploader(QWidget):
         self.add_timestamp_checkbox.setChecked(False)
         layout.addWidget(self.add_timestamp_checkbox)
 
+        label_type_layout = QHBoxLayout()
+        label_type_layout.addWidget(QLabel("PDF Inhalt:"))
+        self.label_type_input = QComboBox(self)
+        self.label_type_input.addItems(["Foto", "Anhang"])
+        label_type_layout.addWidget(self.label_type_input)
+        label_type_layout.addStretch()
+        layout.addLayout(label_type_layout)
+
         self.upload_button = QPushButton("Dateien hinzufügen", self)
         self.upload_button.clicked.connect(self.openFileDialog)
         layout.addWidget(self.upload_button)
@@ -579,7 +587,8 @@ class ImageUploader(QWidget):
             use_original_filenames=True, save_to_disk=False,
             copy_images_to_output_dir=False, open_preview_only=True,
             zip_images=False,
-            add_timestamp=self.add_timestamp_checkbox.isChecked()
+            add_timestamp=self.add_timestamp_checkbox.isChecked(),
+            label_type=self.label_type_input.currentText()
         )
         self.pdf_worker.progressUpdate.connect(lambda val: self.pdf_progress_dialog.setValue(val))
         self.pdf_worker.statusUpdate.connect(lambda msg: self.pdf_progress_dialog.setLabelText(msg))
@@ -744,7 +753,8 @@ class ImageUploader(QWidget):
                                              zip_images=self.save_images_as_zip_checkbox.isChecked(),
                                              delete_originals=self.delete_originals_checkbox.isChecked(),
                                              add_timestamp=self.add_timestamp_checkbox.isChecked(),
-                                             add_timestamp_to_saved_files=add_timestamp_to_saved_files)
+                                             add_timestamp_to_saved_files=add_timestamp_to_saved_files,
+                                             label_type=self.label_type_input.currentText())
         self.pdf_worker.progressUpdate.connect(lambda val: self.pdf_progress_dialog.setValue(val))
         self.pdf_worker.statusUpdate.connect(lambda msg: self.pdf_progress_dialog.setLabelText(msg))
         self.pdf_progress_dialog.canceled.connect(self.pdf_worker.cancel)

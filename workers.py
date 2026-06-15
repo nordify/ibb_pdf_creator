@@ -57,7 +57,7 @@ class PDFCreationWorker(QThread):
                  use_original_filenames=False, save_to_disk=True,
                  copy_images_to_output_dir=True, open_preview_only=False,
                  zip_images=False, delete_originals=False, add_timestamp=False,
-                 add_timestamp_to_saved_files=False):
+                 add_timestamp_to_saved_files=False, label_type="Foto"):
         super().__init__()
         self.image_paths = image_paths
         self.aktennummer = aktennummer
@@ -75,6 +75,7 @@ class PDFCreationWorker(QThread):
         self.delete_originals = delete_originals
         self.add_timestamp = add_timestamp
         self.add_timestamp_to_saved_files = add_timestamp_to_saved_files
+        self.label_type = label_type
         self._isCanceled = False
         self._temp_processing_dir = None
         self._zipf = None
@@ -210,9 +211,9 @@ class PDFCreationWorker(QThread):
                 if self.copy_images_to_output_dir:
                     formatted_num = self.format_image_number(image_counter)
                     if self.dokumentenkürzel.startswith("("):
-                        image_filename = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {formatted_num}{file_extension}"
+                        image_filename = f"{self.aktennummer}-{self.dokumentenzahl} {self.label_type} Nr. {formatted_num}{file_extension}"
                     else:
-                        image_filename = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {formatted_num}{file_extension}"
+                        image_filename = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} {self.label_type} Nr. {formatted_num}{file_extension}"
 
                     # Logic for timestamping saved images
                     timestamp_text_saved = None
@@ -357,9 +358,9 @@ class PDFCreationWorker(QThread):
                     else:
                         formatted_num = self.format_image_number(global_image_counter)
                         if self.dokumentenkürzel.startswith("("):
-                            text = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {formatted_num}"
+                            text = f"{self.aktennummer}-{self.dokumentenzahl} {self.label_type} Nr. {formatted_num}"
                         else:
-                            text = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {formatted_num}"
+                            text = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} {self.label_type} Nr. {formatted_num}"
                     text_width = pdf.get_string_width(text)
                     x_text = (page_width - text_width) / 2
                     y_text = y_image + new_height + offset
@@ -388,11 +389,11 @@ class PDFCreationWorker(QThread):
                         formatted_num1 = self.format_image_number(global_image_counter)
                         formatted_num2 = self.format_image_number(global_image_counter + 1)
                         if self.dokumentenkürzel.startswith("("):
-                            text1 = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {formatted_num1}"
-                            text2 = f"{self.aktennummer}-{self.dokumentenzahl} Foto Nr. {formatted_num2}"
+                            text1 = f"{self.aktennummer}-{self.dokumentenzahl} {self.label_type} Nr. {formatted_num1}"
+                            text2 = f"{self.aktennummer}-{self.dokumentenzahl} {self.label_type} Nr. {formatted_num2}"
                         else:
-                            text1 = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {formatted_num1}"
-                            text2 = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} Foto Nr. {formatted_num2}"
+                            text1 = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} {self.label_type} Nr. {formatted_num1}"
+                            text2 = f"{self.aktennummer}-{self.dokumentenkürzel}-{self.dokumentenzahl} {self.label_type} Nr. {formatted_num2}"
                     text1_width = pdf.get_string_width(text1)
                     text2_width = pdf.get_string_width(text2)
 
