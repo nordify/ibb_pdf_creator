@@ -33,7 +33,7 @@ class ImageImportWorker(QThread):
             try:
                 with Image.open(file_path) as img:
                     img = ImageOps.exif_transpose(img)
-                    if img.mode in ("RGBA", "LA"):
+                    if img.mode not in ("L", "RGB"):
                         img = img.convert("RGB")
                     buf = BytesIO()
                     img.save(buf, format='JPEG')
@@ -179,9 +179,9 @@ class PDFCreationWorker(QThread):
                 
                 # Create a copy for PDF processing
                 img = img_raw.copy()
-                if img.mode in ("RGBA", "LA"):
+                if img.mode not in ("L", "RGB"):
                     img = img.convert("RGB")
-                    img_raw = img_raw.convert("RGB")  # Also convert img_raw if needed
+                    img_raw = img_raw.convert("RGB")
 
                 width, height = img.size
                 aspect_ratio = width / height
@@ -229,7 +229,7 @@ class PDFCreationWorker(QThread):
 
                         if timestamp_text_saved:
                             img_to_save = img_raw.copy()
-                            if img_to_save.mode in ("RGBA", "LA"):
+                            if img_to_save.mode not in ("L", "RGB"):
                                 img_to_save = img_to_save.convert("RGB")
                             img_to_save = self.add_timestamp_overlay(img_to_save, timestamp_text_saved)
                             buf = BytesIO()
@@ -243,7 +243,7 @@ class PDFCreationWorker(QThread):
                         final_path = os.path.join(self.output_folder, image_filename)
                         if timestamp_text_saved:
                             img_to_save = img_raw.copy()
-                            if img_to_save.mode in ("RGBA", "LA"):
+                            if img_to_save.mode not in ("L", "RGB"):
                                 img_to_save = img_to_save.convert("RGB")
                             img_to_save = self.add_timestamp_overlay(img_to_save, timestamp_text_saved)
                             img_to_save.save(final_path, quality=95, subsampling=0)
